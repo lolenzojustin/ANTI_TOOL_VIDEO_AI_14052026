@@ -83,9 +83,9 @@ class MultiThread(QThread):
                 search_input.wait_for(state="visible", timeout=15000)
                 search_input.fill("test cảnh")
                 page.keyboard.press("Enter")
-                self._stop_event.wait(1000)  # Có thể ngắt ngay khi stop() được gọi
                 # Đợi một lát để trang load kết quả
-                page.wait_for_timeout(3000) 
+                # page.wait_for_timeout(3000) 
+                time.sleep(3)  # Dùng sleep thay vì wait_for để dễ dàng ngắt nếu dừng giữa chừng
                 
                 # Kiểm tra dừng trước khi gọi API
                 if not self.is_running:
@@ -95,25 +95,25 @@ class MultiThread(QThread):
                 
                 # 4. Call API N8N
                 self.record.emit(self.index, "Đang gọi API N8N", "-")
-                payload = {
-                    "scene_index": self.index,
-                    "action": "Tìm kiếm google: test cảnh"
-                }
                 
-                response = requests.post(
+                response = requests.get(
                     self.api_n8n,
-                    json=payload,
-                    timeout=120
+                    timeout=20
                 )
                 
                 try:
                     result = response.json()
+                    if isinstance(result, dict) and "content" in result:
+                        response_data = str(result["content"])
+                    else:
+                        response_data = str(result)
                 except Exception:
-                    result = response.text
+                    response_data = response.text
                 
                 status = "Hoàn thành"
-                response_data = str(result)[:200]
-                
+                # self._stop_event.wait(1000)  # Có thể ngắt ngay khi stop() được gọi
+                print("đang ở đây sau khi gọi API N8N, chuẩn bị đóng browser")
+                time.sleep(8)  # Đợi thêm 8 giây trước khi đóng browser để đảm bảo mọi thứ đã hoàn tất
                 browser.close()
                 
         except Exception as e:
@@ -207,6 +207,7 @@ class Manager(QtWidgets.QMainWindow, Ui_Widget):
         }
 
         self._load_config()
+        self.scene_prompt_boxes = self.tab_veo3.findChildren(QtWidgets.QTextEdit, "promptBox")
         self._connect_config_signals()
 
         self.threads = []
@@ -269,11 +270,30 @@ class Manager(QtWidgets.QMainWindow, Ui_Widget):
             QMessageBox.warning(self, "Lỗi", "Số lượng cảnh không hợp lệ.")
             return
 
+        # Giới hạn tối đa 10 luồng
+        if input_soluong > 10:
+            QMessageBox.warning(self, "Lỗi", "Số lượng cảnh tối đa là 10.")
+            return
+
         # Lấy API URL GPM từ ô nhập liệu trên giao diện
         input_api_url_gpm = self.le_api_url_gpm.text().strip()
         if not input_api_url_gpm:
             QMessageBox.warning(self, "Thiếu thông tin", "Vui lòng nhập API URL GPM (ví dụ: http://localhost:9495).")
             return
+
+        # Danh sách API N8N cho từng luồng (10 API)
+        api_list = [
+            "https://thangdepzai.devttt.com/webhook/11ca20ab-5425-48b7-8aa2-7b517597f196",
+            "https://thangdepzai.devttt.com/webhook/81a25e7e-6f7b-4d96-9e40-45130a5e3ab7",
+            "https://thangdepzai.devttt.com/webhook/c4dc4bc4-fd95-485d-b638-c9957d6abd0f",
+            "https://thangdepzai.devttt.com/webhook/69fb1066-09b2-40a5-8b02-a5a33c682aa0",
+            "https://thangdepzai.devttt.com/webhook/120fc52b-9b7e-4bcc-a1cd-e6fdcca457c1",
+            "https://thangdepzai.devttt.com/webhook/ee39526e-7f92-4c56-a32e-bd0c0f336009",
+            "https://thangdepzai.devttt.com/webhook/cbc9be64-6fff-4579-83d2-1ba3ce2d079b",
+            "https://thangdepzai.devttt.com/webhook/b8887c04-04f0-4857-b4cb-9d307335f88c",
+            "https://thangdepzai.devttt.com/webhook/ad1d5232-e771-4bee-891a-1b751ef90858",
+            "https://thangdepzai.devttt.com/webhook/3534d74c-722b-4f71-9db7-5fa62614c818"
+        ]
 
         # Đọc danh sách proxy từ ô nhập thủ công trên giao diện
         # Giữ nguyên vị trí từng dòng: luồng i lấy proxy dòng i
@@ -299,8 +319,6 @@ class Manager(QtWidgets.QMainWindow, Ui_Widget):
             valid_count = sum(1 for p in proxy_list if p)
             print(f"[Manager] Đọc được {valid_count}/{len(proxy_list)} proxy hợp lệ. Proxy sai/không điền sẽ sử dụng proxy local.")
 
-        input_api_n8n = "https://leminhthang.io.vn/webhook/5be66201-0ab3-4244-b6f7-2182dd3eee91"
-
         self.total_threads = input_soluong
         self.completed_threads = 0
         self.running_threads = input_soluong  # Khởi đầu: tất cả luồng đều chạy
@@ -318,9 +336,11 @@ class Manager(QtWidgets.QMainWindow, Ui_Widget):
         for i in range(1, input_soluong + 1):
             # Lấy proxy theo index (dòng i-1 trong file), nếu không có thì dùng proxy local
             proxy = proxy_list[i - 1] if (i - 1) < len(proxy_list) else ""
+            # Gán API N8N theo luồng: luồng 1 dùng API 0, luồng 2 dùng API 1, ..., luồng 10 dùng API 9
+            api_n8n = api_list[i-1]
             thread = MultiThread(
                 index=i,
-                api_n8n=input_api_n8n,
+                api_n8n=api_n8n,
                 api_url_gpm=input_api_url_gpm,
                 proxy=proxy
             )
@@ -344,6 +364,11 @@ class Manager(QtWidgets.QMainWindow, Ui_Widget):
         
         # Nếu luồng hoàn tất, bị lỗi, hoặc bị dừng thì giảm bộ đếm luồng đang chạy
         if status == "Hoàn thành" or status.startswith("Lỗi") or status == "Đã dừng":
+            if status == "Hoàn thành" and response_data:
+                # Cập nhật text prompt cho cảnh tương ứng nếu có dữ liệu trả về
+                if 1 <= index <= len(self.scene_prompt_boxes):
+                    self.scene_prompt_boxes[index - 1].setPlainText(response_data)
+
             self.completed_threads += 1
             self.running_threads = max(0, self.running_threads - 1)  # Giảm luồng đang chạy
             # Cập nhật nút hiển thị số luồng đang chạy
